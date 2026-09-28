@@ -22,7 +22,7 @@ class Config:
     WIDTH_M: float = 30.0; SIDEWALK_HEIGHT_M: float = 2.5; ROAD_HEIGHT_M: float = 4.0
     LAMPPOST_RADIUS_M: float = 0.15  # 街灯・標識ポール（障害物）の太さ
 
-    AGENT_RADIUS_M: float = 0.3; V0_MEAN: float = 1.3; V0_STD: float = 0.2; MAX_SPEED_M_S: float = 2.2
+    AGENT_RADIUS_M: float = 0.22; V0_MEAN: float = 1.3; V0_STD: float = 0.2; MAX_SPEED_M_S: float = 2.2
     REACTION_TIME_DEFAULT_S: float = 0.2; REACTION_TIME_PHONE_S: float = 0.556  # 出典[4]
     FOV_DEFAULT_DEG: float = 120.0; FOV_PHONE_DEG: float = 90.0
     AVOID_BETA_PHONE: float = 0.7
@@ -62,8 +62,8 @@ class Config:
     LAPSE_OBSTACLE_RESIDUAL: float = 0.2
 
     # --- 柱接触／ニアミスの判定係数 ---
-    OBSTACLE_CONTACT_FACTOR: float = 1.4   # 半径の和のこの倍数まで近づいたら「接触」
-    NEAR_MISS_FACTOR: float = 1.6          # 半径の和のこの倍数まで近づいたら「ニアミス」
+    OBSTACLE_CONTACT_FACTOR: float = 1.2   # 半径の和のこの倍数まで近づいたら「接触」
+    NEAR_MISS_FACTOR: float = 1.3          # 半径の和のこの倍数まで近づいたら「ニアミス」
 
     # --- 2D(Pygame)描画向けの設定。3D版では M_TO_PX 等は使わず、色だけ流用する ---
     M_TO_PX: int = 25; FOV_VIS_RADIUS_M: float = 1.0
