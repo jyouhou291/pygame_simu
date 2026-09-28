@@ -173,10 +173,10 @@ def ensure_japanese_font() -> str | None:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--p_phone', type=float, default=0.3)
-    parser.add_argument('--spawn_rate', type=float, default=0.35)
+    parser.add_argument('--spawn_rate', type=float, default=0.9)
     parser.add_argument('--speed', type=int, default=1)
     parser.add_argument('--seed', type=int, default=None)
-    parser.add_argument('--max_agents', type=int, default=8, help='同時に存在できる歩行者数の上限（渋滞防止）')
+    parser.add_argument('--max_agents', type=int, default=22, help='同時に存在できる歩行者数の上限（渋滞防止）')
     args = parser.parse_args()
 
     core = SimulationCore(p_phone=args.p_phone, spawn_rate=args.spawn_rate, seed=args.seed,

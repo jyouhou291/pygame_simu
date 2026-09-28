@@ -33,7 +33,7 @@ class ControlPanel:
         self.p_phone_label = ttk.Label(params_frame, text="30.0 %")
         self.p_phone_label.grid(row=0, column=1, columnspan=2, sticky=tk.E)
 
-        self.spawn_rate_var = tk.DoubleVar(value=0.5)
+        self.spawn_rate_var = tk.DoubleVar(value=0.9)
         ttk.Label(params_frame, text="生成レート (人/秒)").grid(row=2, column=0, sticky=tk.W, pady=(10, 2))
         self.spawn_rate_scale = ttk.Scale(params_frame, from_=0.1, to=5.0, orient=tk.HORIZONTAL, variable=self.spawn_rate_var, length=250)
         self.spawn_rate_scale.grid(row=3, column=0, columnspan=3, sticky=(tk.W, tk.E))
