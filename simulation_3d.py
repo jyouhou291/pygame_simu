@@ -20,6 +20,7 @@ import os
 from ursina import (
     Ursina, Entity, Text, Mesh, Vec3, color,
     destroy, time as ursina_time, held_keys, application, camera, window,
+    DirectionalLight, AmbientLight,
 )
 from ursina.models.procedural.cylinder import Cylinder
 
@@ -45,18 +46,24 @@ class AgentView:
 
     def __init__(self, agent, config):
         is_phone = agent.phone_user
+        self.is_phone = is_phone
         c = color.rgb32(220, 50, 50) if is_phone else color.rgb32(40, 110, 210)
         self.root = Entity(position=(agent.pos[0], 0, agent.pos[1]))
-        self.body = Entity(parent=self.root,
+        # 胴体・頭は別Entityにまとめ、歩行の上下ゆれ(bob)をここに掛ける
+        self.torso = Entity(parent=self.root, position=(0, 0, 0))
+        self.body = Entity(parent=self.torso,
                             model=Cylinder(resolution=8, radius=config.AGENT_RADIUS_M * 0.8, height=1.1),
-                            color=c, position=(0, 0.0, 0))
-        self.head = Entity(parent=self.root, model='sphere', color=c,
-                            scale=config.AGENT_RADIUS_M * 1.3, position=(0, 1.25, 0))
+                            color=c, position=(0, 0.0, 0),
+                            rotation_x=12 if is_phone else 0)  # スマホ利用者は少し前かがみ
+        self.head = Entity(parent=self.torso, model='sphere', color=c,
+                            scale=config.AGENT_RADIUS_M * 1.3, position=(0, 1.25, 0),
+                            rotation_x=28 if is_phone else 0)  # スマホ利用者は俯く
         if is_phone:
-            # スマホを持つ手元を表す小さな白い板
-            self.phone = Entity(parent=self.root, model='cube', color=color.white,
-                                 scale=(0.12, 0.2, 0.03), position=(0.25, 0.9, 0.25),
-                                 rotation=(20, -30, 0))
+            # スマホを持つ手元（前かがみのポーズに合わせてやや大きめ・前方に）
+            self.phone = Entity(parent=self.torso, model='cube', color=color.white,
+                                 scale=(0.18, 0.28, 0.03), position=(0.22, 1.0, 0.32),
+                                 rotation=(35, -25, 0))
+        self.phase = agent.id * 1.7  # 個体差をつけて全員同期しないようにする
         fov_angle = 90.0 if is_phone else 120.0
         fov_radius = 1.6 if is_phone else 3.2
         fov_alpha = 130 if is_phone else 28
@@ -72,6 +79,9 @@ class AgentView:
         if speed > 0.1:
             yaw = math.degrees(math.atan2(agent.vel[0], agent.vel[1]))
             self.root.rotation_y = yaw
+        # 歩行の上下ゆれ（速度に応じて周期が変わる、簡易的な"歩いている感"の演出）
+        self.phase += speed * ursina_time.dt * 5.0
+        self.torso.y = abs(math.sin(self.phase)) * 0.05
         self.fov.enabled = not in_lapse
         self.lapse_dot.enabled = in_lapse
 
@@ -163,12 +173,14 @@ def ensure_japanese_font() -> str | None:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--p_phone', type=float, default=0.3)
-    parser.add_argument('--spawn_rate', type=float, default=1.0)
+    parser.add_argument('--spawn_rate', type=float, default=0.35)
     parser.add_argument('--speed', type=int, default=1)
     parser.add_argument('--seed', type=int, default=None)
+    parser.add_argument('--max_agents', type=int, default=8, help='同時に存在できる歩行者数の上限（渋滞防止）')
     args = parser.parse_args()
 
-    core = SimulationCore(p_phone=args.p_phone, spawn_rate=args.spawn_rate, seed=args.seed)
+    core = SimulationCore(p_phone=args.p_phone, spawn_rate=args.spawn_rate, seed=args.seed,
+                           max_agents=args.max_agents)
     speed_multiplier = args.speed
 
     app = Ursina(title="歩きスマホ行動シミュレーション（3D）", borderless=False)
@@ -176,10 +188,12 @@ def main():
 
     build_scene(core)
 
+    AmbientLight(color=color.rgba32(140, 140, 150, 255))
+    sun = DirectionalLight()
+    sun.look_at(Vec3(1, -2, 1))
+
     W, H = core.config.WIDTH_M, core.config.TOTAL_HEIGHT_M
     cam_target = Vec3(W / 2, 0, H / 2)
-    camera.position = (W / 2, 16, -8)
-    camera.look_at(cam_target)
 
     views = {}  # agent.id -> AgentView
     markers = []
@@ -197,7 +211,9 @@ def main():
             f"[←→:回転 ↑↓:見下ろす角度 +/-:ズーム Space:一時停止 Q:終了]"
         )
 
-    cam_state = {"yaw": -18.0, "pitch": 50.0, "dist": 24.0}
+    # 真上に近い急角度だと2D版と印象が変わらず立体感が出ないため、もっと
+    # 低く近い「見渡す」構図をデフォルトにする（矢印キー/ズームで調整可）
+    cam_state = {"yaw": -12.0, "pitch": 24.0, "dist": 15.0}
 
     def apply_camera():
         yaw = math.radians(cam_state["yaw"])

@@ -41,7 +41,8 @@ class PygameRenderer:
     """SimulationCore の物理状態を Pygame で描画するだけのラッパー。"""
 
     def __init__(self, args):
-        self.core = SimulationCore(p_phone=args.p_phone, spawn_rate=args.spawn_rate, seed=args.seed)
+        self.core = SimulationCore(p_phone=args.p_phone, spawn_rate=args.spawn_rate, seed=args.seed,
+                                    max_agents=args.max_agents)
         self.speed_multiplier = args.speed
         c = self.core.config
         pygame.init()
@@ -111,9 +112,10 @@ class PygameRenderer:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--p_phone', type=float, default=0.3)
-    parser.add_argument('--spawn_rate', type=float, default=1.0)
+    parser.add_argument('--spawn_rate', type=float, default=0.35)
     parser.add_argument('--speed', type=int, default=1, help='Simulation speed multiplier.')
     parser.add_argument('--seed', type=int, default=None, help='再現したい場合のみ指定。未指定なら毎回変化する。')
+    parser.add_argument('--max_agents', type=int, default=8, help='同時に存在できる歩行者数の上限（渋滞防止）')
     renderer = PygameRenderer(parser.parse_args())
     renderer.run()
 

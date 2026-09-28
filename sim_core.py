@@ -114,10 +114,15 @@ class SimulationCore:
     2D(simulation.py)・3D(simulation_3d.py)の両方から継承・利用される。"""
 
     def __init__(self, p_phone: float, spawn_rate: float, seed: Optional[int] = None,
-                 dt: float = 1.0 / 60.0):
+                 dt: float = 1.0 / 60.0, max_agents: int = 8):
         self.config = Config()
         self.p_phone = p_phone
         self.spawn_rate = spawn_rate
+        # 同時存在人数の上限。歩道の帯（幅2.5m x 2本）は狭いため、上限なしで
+        # 生成し続けると密度が破綻して将棋倒し状態になり、「歩きスマホだから
+        # 危険」という個別の対比がかえって見えなくなってしまう。生成レートは
+        # あくまで「上限までの埋まる速さ」を調整するものとして扱う。
+        self.max_agents = max_agents
         self.rng = np.random.default_rng(seed)  # seed未指定なら毎回変化する
         self.dt = dt
         self.sim_time = 0.0
@@ -144,6 +149,8 @@ class SimulationCore:
 
     # -------------------- スポーン（歩道の二方向すれ違い） --------------------
     def spawn_pedestrian(self):
+        if len(self.agents) >= self.max_agents:
+            return
         if self.rng.random() >= self.spawn_rate * self.dt:
             return
         direction = 1 if self.rng.random() < 0.5 else -1
