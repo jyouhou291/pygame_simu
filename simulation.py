@@ -1,11 +1,17 @@
 # =============================================================================
-# 歩きスマホ行動シミュレーション (v17.0 - Simulation Engine)
+# 歩きスマホ行動シミュレーション (v18.0 - Simulation Engine)
 #
-# v17.0 での変更点（駅コンコース版への改訂）:
-#   - 舞台を「歩道+車道」から「駅コンコース」に変更（改札12ヶ所、柱・キオス
-#     クの障害物を追加、4方向（改札⇔ホーム縦方向／売店・別ホームへの横方向）
-#     の人流に対応）
-#   - 柱・什器への接触を独立イベントとして検出（歩きスマホの典型的な事故）
+# v17.0 → v18.0 での変更点:
+#   舞台をいったん駅コンコースへ変更したが、「危険性がひと目で視覚的に
+#   わかるものがいい」というご要望により、より単純で読み取りやすい**元の
+#   歩道（二方向のすれ違い）シナリオに戻した**。歩道の対向流は「1人1人の
+#   接近・衝突が追いやすい」という利点がある。v17.0で追加した検出機能
+#   （柱・什器への接触、よろめき、ニアミス、注意ラプス、実測値ベースの
+#   パラメータ）はそのまま維持し、障害物は駅の柱ではなく歩道上の
+#   街灯・標識ポールとして再配置した。
+#
+# v17.0 で追加した内容（維持）:
+#   - 柱・什器（街灯・標識）への接触を独立イベントとして検出（歩きスマホの典型的な事故）
 #   - 「よろめき（転倒リスク）」を、他者との衝突や回避操舵とは無関係な
 #     ゆらぎ力（歩行リズムの乱れ）の指数移動平均から検出
 #   - 「注意ラプス」（画面に視線が固定され、前方も含め周囲を一切見ていない
@@ -53,12 +59,9 @@ import os
 # --- 定数・設定クラス ---
 @dataclass
 class Config:
-    # --- 駅コンコース空間の定義 ---
-    WIDTH_M: float = 30.0
-    HEIGHT_M: float = 18.0
-    GATE_COUNT: int = 12
-    OBSTACLES: tuple = ((8.0, 6.0, 0.5), (22.0, 6.0, 0.5), (8.0, 12.5, 0.5),
-                         (22.0, 12.5, 0.5), (15.0, 9.0, 1.1))  # 柱4本+中央キオスク
+    # --- 歩道空間の定義（二方向のすれ違い） ---
+    WIDTH_M: float = 30.0; SIDEWALK_HEIGHT_M: float = 2.5; ROAD_HEIGHT_M: float = 4.0
+    LAMPPOST_RADIUS_M: float = 0.15  # 街灯・標識ポール（障害物）の太さ
 
     AGENT_RADIUS_M: float = 0.3; V0_MEAN: float = 1.3; V0_STD: float = 0.2; MAX_SPEED_M_S: float = 2.2
     REACTION_TIME_DEFAULT_S: float = 0.2; REACTION_TIME_PHONE_S: float = 0.556  # 出典[4]
@@ -92,19 +95,27 @@ class Config:
     NEAR_MISS_FACTOR: float = 1.6          # 半径の和のこの倍数まで近づいたら「ニアミス」
 
     M_TO_PX: int = 25; FOV_VIS_RADIUS_M: float = 1.0
-    FLOOR_COLOR: tuple = (35, 40, 47); FLOOR_LINE_COLOR: tuple = (47, 54, 63)
-    GATE_COLOR: tuple = (51, 59, 70); OBSTACLE_COLOR: tuple = (69, 79, 92)
-    AGENT_COLOR: tuple = (79, 168, 255); AGENT_PHONE_COLOR: tuple = (255, 77, 77)
+    SIDEWALK_COLOR: tuple = (200, 200, 200); ROAD_COLOR: tuple = (105, 105, 105); LINE_COLOR: tuple = (255, 255, 100)
+    OBSTACLE_COLOR: tuple = (90, 90, 90)
+    AGENT_COLOR: tuple = (0, 100, 200); AGENT_PHONE_COLOR: tuple = (220, 50, 50)
     COLLISION_MARKER_COLOR: tuple = (255, 59, 48)
     OBSTACLE_MARKER_COLOR: tuple = (255, 176, 32)
     STUMBLE_MARKER_COLOR: tuple = (176, 125, 255)
+    TOTAL_HEIGHT_M: float = field(init=False)
     WIDTH_PX: int = field(init=False); HEIGHT_PX: int = field(init=False)
-    GATE_XS_M: tuple = field(init=False)
+    OBSTACLES: tuple = field(init=False)  # 歩道上の街灯・標識ポール
 
     def __post_init__(self):
+        self.TOTAL_HEIGHT_M = 2 * self.SIDEWALK_HEIGHT_M + self.ROAD_HEIGHT_M
         self.WIDTH_PX = int(self.WIDTH_M * self.M_TO_PX)
-        self.HEIGHT_PX = int(self.HEIGHT_M * self.M_TO_PX)
-        self.GATE_XS_M = tuple(np.linspace(1.5, self.WIDTH_M - 1.5, self.GATE_COUNT))
+        self.HEIGHT_PX = int(self.TOTAL_HEIGHT_M * self.M_TO_PX)
+        # 街灯・標識ポールは歩道の建物側の端に寄せて配置する（歩道の真ん中に
+        # 置くと歩行スペースの大半を塞いでしまい、不自然な渋滞の原因になる）
+        top_y = self.SIDEWALK_HEIGHT_M * 0.25
+        bottom_y = self.SIDEWALK_HEIGHT_M + self.ROAD_HEIGHT_M + self.SIDEWALK_HEIGHT_M * 0.75
+        xs = np.linspace(4.0, self.WIDTH_M - 4.0, 5)
+        self.OBSTACLES = tuple((float(x), top_y, self.LAMPPOST_RADIUS_M) for x in xs[::2]) + \
+                          tuple((float(x), bottom_y, self.LAMPPOST_RADIUS_M) for x in xs[1::2])
 
 
 # --- エージェントクラス ---
@@ -172,7 +183,7 @@ class Simulation:
         self.rng = np.random.default_rng(args.seed)  # 修正: seed未指定なら毎回変化する
         pygame.init()
         self.screen = pygame.display.set_mode((self.config.WIDTH_PX, self.config.HEIGHT_PX))
-        pygame.display.set_caption("歩きスマホ行動シミュレーション（駅コンコース）")
+        pygame.display.set_caption("歩きスマホ行動シミュレーション")
         self.font = pygame.font.Font(None, 26); self.big_font = pygame.font.Font(None, 72)
         self.clock = pygame.time.Clock(); self.dt = 1.0 / 60.0
         self.is_running = True; self.sim_time = 0.0; self.is_paused = False
@@ -185,35 +196,37 @@ class Simulation:
         self.phone_user_total_stumbles = 0; self.normal_user_total_stumbles = 0
         self.collision_markers = []
         self.ongoing_collisions = set(); self.ongoing_near = set(); self.ongoing_obstacle = set()
+        self._define_walkable_areas()
 
-    # -------------------- スポーン（駅コンコースの4方向流動） --------------------
+    def _define_walkable_areas(self):
+        self.sidewalk_top_y_range_m = (0.0, self.config.SIDEWALK_HEIGHT_M)
+        self.sidewalk_bottom_y_range_m = (self.config.SIDEWALK_HEIGHT_M + self.config.ROAD_HEIGHT_M,
+                                           self.config.TOTAL_HEIGHT_M)
+
+    def _y_range_for(self, y: float):
+        return self.sidewalk_top_y_range_m if y < self.config.TOTAL_HEIGHT_M / 2 else self.sidewalk_bottom_y_range_m
+
+    # -------------------- スポーン（歩道の二方向すれ違い） --------------------
     def _spawn_pedestrian(self):
         if self.rng.random() >= self.args.spawn_rate * self.dt:
             return
-        flow = self.rng.choice(["down", "up", "left", "right"], p=[0.37, 0.37, 0.13, 0.13])
-        gx = float(self.rng.choice(self.config.GATE_XS_M))
-        W, H = self.config.WIDTH_M, self.config.HEIGHT_M
-        if flow == "down":
-            pos = np.array([gx + self.rng.uniform(-0.5, 0.5), -1.0])
-            goal = np.array([gx + self.rng.uniform(-1, 1), H + 6])
-        elif flow == "up":
-            pos = np.array([gx + self.rng.uniform(-0.5, 0.5), H + 1.0])
-            goal = np.array([gx, -6.0])
-        elif flow == "right":
-            pos = np.array([-1.0, self.rng.uniform(2.0, H - 2.0)])
-            goal = np.array([W + 6, pos[1] + self.rng.uniform(-1.5, 1.5)])
+        direction = 1 if self.rng.random() < 0.5 else -1
+        y_range = self.sidewalk_top_y_range_m if self.rng.random() < 0.5 else self.sidewalk_bottom_y_range_m
+        r = self.config.AGENT_RADIUS_M
+        if direction == 1:
+            pos_x = self.rng.uniform(r, r * 3)
         else:
-            pos = np.array([W + 1.0, self.rng.uniform(2.0, H - 2.0)])
-            goal = np.array([-6.0, pos[1] + self.rng.uniform(-1.5, 1.5)])
+            pos_x = self.rng.uniform(self.config.WIDTH_M - r * 3, self.config.WIDTH_M - r)
+        pos = np.array([pos_x, self.rng.uniform(y_range[0] + r, y_range[1] - r)])
+        goal = np.array([(self.config.WIDTH_M + 6.0) if direction == 1 else -6.0, pos[1]])
 
-        if any(np.linalg.norm(pos - a.pos) < 2 * self.config.AGENT_RADIUS_M for a in self.agents):
+        if any(np.linalg.norm(pos - a.pos) < 2 * r for a in self.agents):
             return
         v0 = self.rng.normal(self.config.V0_MEAN, self.config.V0_STD)
-        heading = (goal - pos) / max(np.linalg.norm(goal - pos), 1e-6)
         self.agents.append(Pedestrian(
             id=self.next_agent_id, config=self.config,
             phone_user=self.rng.random() < self.args.p_phone,
-            pos=pos, vel=heading * v0 * 0.5, v0=v0, goal=goal, spawn_time=self.sim_time,
+            pos=pos, vel=np.array([v0 * direction * 0.5, 0.0]), v0=v0, goal=goal, spawn_time=self.sim_time,
         ))
         self.next_agent_id += 1
 
@@ -335,12 +348,20 @@ class Simulation:
                     self.normal_user_total_stumbles += 1
                 self.collision_markers.append(("stumble", agent.pos.copy(), self.sim_time, agent.phone_user))
 
-            to_goal = agent.goal - agent.pos
-            dist_goal = max(np.linalg.norm(to_goal), 1e-6)
-            e0 = to_goal / dist_goal
+            # 駆動力の向きは「x方向にゴールへ向かう」だけにする（y成分を
+            # 含めると、回避行動で上下にずれた分を元のyへ引き戻そうとする
+            # 力が働いてしまい、回避操舵と競合して渋滞・膠着を起こすため）
+            e0 = np.array([1.0 if agent.goal[0] >= agent.pos[0] else -1.0, 0.0])
             v_desired_vec = e0 * agent.v_desired_magnitude * speed_dampening_factor
             f_drive = (v_desired_vec - agent.vel) / self.config.RELAXATION_TIME_TAU_S
-            forces[agent.id] = f_drive + f_avoid + f_obs + f_fluct
+
+            # --- 歩道の境界（車道側へはみ出さないようにする壁の反発力） ---
+            y_range = self._y_range_for(agent.pos[1])
+            f_wall = np.array([0.0,
+                                self.config.OBSTACLE_REPULSION_A * np.exp((agent.radius - (agent.pos[1] - y_range[0])) / self.config.OBSTACLE_REPULSION_B)
+                                - self.config.OBSTACLE_REPULSION_A * np.exp((agent.radius - (y_range[1] - agent.pos[1])) / self.config.OBSTACLE_REPULSION_B)])
+
+            forces[agent.id] = f_drive + f_avoid + f_obs + f_wall + f_fluct
 
         for agent in self.agents:
             agent.vel += forces[agent.id] * self.dt
@@ -348,6 +369,8 @@ class Simulation:
             if speed > self.config.MAX_SPEED_M_S:
                 agent.vel *= self.config.MAX_SPEED_M_S / speed
             agent.pos += agent.vel * self.dt
+            y_range = self._y_range_for(agent.pos[1])
+            agent.pos[1] = np.clip(agent.pos[1], y_range[0] + agent.radius, y_range[1] - agent.radius)
 
         self.ongoing_collisions = current_frame_overlaps
         self.ongoing_near = current_frame_near
@@ -356,7 +379,7 @@ class Simulation:
         margin = 6.0
         despawn_candidates = [a for a in self.agents if (self.sim_time - a.spawn_time > 1.0) and (
             a.pos[0] < -margin or a.pos[0] > self.config.WIDTH_M + margin or
-            a.pos[1] < -margin or a.pos[1] > self.config.HEIGHT_M + margin)]
+            a.pos[1] < -margin or a.pos[1] > self.config.TOTAL_HEIGHT_M + margin)]
         for agent in despawn_candidates:
             agent.exit_time = self.sim_time; self.completed_agents.append(agent)
             if agent.phone_user:
@@ -372,16 +395,15 @@ class Simulation:
     # -------------------- 描画 --------------------
     def _draw(self):
         c = self.config
-        self.screen.fill(c.FLOOR_COLOR)
+        self.screen.fill(c.ROAD_COLOR)
+        pygame.draw.rect(self.screen, c.SIDEWALK_COLOR, pygame.Rect(0, 0, c.WIDTH_PX, int(c.SIDEWALK_HEIGHT_M * c.M_TO_PX)))
+        pygame.draw.rect(self.screen, c.SIDEWALK_COLOR, pygame.Rect(
+            0, int((c.SIDEWALK_HEIGHT_M + c.ROAD_HEIGHT_M) * c.M_TO_PX), c.WIDTH_PX, int(c.SIDEWALK_HEIGHT_M * c.M_TO_PX)))
+        center_y = int(c.TOTAL_HEIGHT_M / 2 * c.M_TO_PX)
         for x in range(0, c.WIDTH_PX, 40):
-            pygame.draw.line(self.screen, c.FLOOR_LINE_COLOR, (x, 0), (x, c.HEIGHT_PX), 1)
-        for y in range(0, c.HEIGHT_PX, 40):
-            pygame.draw.line(self.screen, c.FLOOR_LINE_COLOR, (0, y), (c.WIDTH_PX, y), 1)
-        for gx in c.GATE_XS_M:
-            px = int(gx * c.M_TO_PX)
-            pygame.draw.rect(self.screen, c.GATE_COLOR, pygame.Rect(px - 9, 0, 18, 26))
+            pygame.draw.line(self.screen, c.LINE_COLOR, (x, center_y), (x + 20, center_y), 3)
         for (ox, oy, orad) in c.OBSTACLES:
-            pygame.draw.circle(self.screen, c.OBSTACLE_COLOR, (int(ox * c.M_TO_PX), int(oy * c.M_TO_PX)), int(orad * c.M_TO_PX))
+            pygame.draw.circle(self.screen, c.OBSTACLE_COLOR, (int(ox * c.M_TO_PX), int(oy * c.M_TO_PX)), max(3, int(orad * c.M_TO_PX)))
 
         for agent in self.agents:
             agent.draw(self.screen, self.sim_time < agent.lapse_until)
@@ -454,7 +476,7 @@ class Simulation:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--p_phone', type=float, default=0.3)
-    parser.add_argument('--spawn_rate', type=float, default=1.5, help='駅コンコースを想定し既定値を引き上げ')
+    parser.add_argument('--spawn_rate', type=float, default=1.0)
     parser.add_argument('--speed', type=int, default=1, help='Simulation speed multiplier.')
     parser.add_argument('--seed', type=int, default=None, help='再現したい場合のみ指定。未指定なら毎回変化する。')
     sim = Simulation(parser.parse_args())
