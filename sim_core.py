@@ -56,6 +56,10 @@ class Config:
     # --- 注意ラプス（画面注視中の瞬間的な視野喪失） 出典[6] ---
     LAPSE_RATE_PER_S: float = 0.5
     LAPSE_DURATION_MIN_S: float = 0.3; LAPSE_DURATION_MAX_S: float = 0.8
+    # ラプス中でも柱・什器への回避力をゼロにはせず、わずかに残す（完全に
+    # ゼロだと、レーンを無視しがちなスマホ利用者が柱の近くでラプスした
+    # 場合に本当に動けなくなる「引っかかり」バグの原因になっていた）
+    LAPSE_OBSTACLE_RESIDUAL: float = 0.2
 
     # --- 柱接触／ニアミスの判定係数 ---
     OBSTACLE_CONTACT_FACTOR: float = 1.4   # 半径の和のこの倍数まで近づいたら「接触」
@@ -78,8 +82,12 @@ class Config:
         self.TOTAL_HEIGHT_M = 2 * self.SIDEWALK_HEIGHT_M + self.ROAD_HEIGHT_M
         self.WIDTH_PX = int(self.WIDTH_M * self.M_TO_PX)
         self.HEIGHT_PX = int(self.TOTAL_HEIGHT_M * self.M_TO_PX)
-        top_y = self.SIDEWALK_HEIGHT_M * 0.25
-        bottom_y = self.SIDEWALK_HEIGHT_M + self.ROAD_HEIGHT_M + self.SIDEWALK_HEIGHT_M * 0.75
+        # 街灯は帯の中央（両方向のレーンの間）に置く。以前はレーン分離力の
+        # 目標位置(LANE_BIAS_FRAC=0.25/0.75)と全く同じ座標に街灯を置いて
+        # しまっており、片方向のレーンがそのまま街灯を貫通する形になって
+        # 「電柱に引っかかる人が出てくる」不具合の原因になっていた。
+        top_y = self.SIDEWALK_HEIGHT_M * 0.5
+        bottom_y = self.SIDEWALK_HEIGHT_M + self.ROAD_HEIGHT_M + self.SIDEWALK_HEIGHT_M * 0.5
         xs = np.linspace(4.0, self.WIDTH_M - 4.0, 5)
         self.OBSTACLES = tuple((float(x), top_y, self.LAMPPOST_RADIUS_M) for x in xs[::2]) + \
                           tuple((float(x), bottom_y, self.LAMPPOST_RADIUS_M) for x in xs[1::2])
@@ -266,19 +274,25 @@ class SimulationCore:
                     f_avoid += agent.avoid_beta * evasion_boost * force_mag * force_direction
 
             # --- 障害物（街灯・標識ポール）との相互作用 ---
+            # 注意ラプス中は知覚をほぼゼロにする設計だが、完全にゼロにすると
+            # 「中央に寄りやすいレーン無視のスマホ利用者」が「ラプス中は
+            # 障害物力もゼロ」という2つの条件が重なったときに、電柱のすぐ
+            # そばで本当に動けなくなる（引っかかる）不具合が起きていた。
+            # ラプス中もごくわずかな残存知覚(LAPSE_OBSTACLE_RESIDUAL)を
+            # 残すことで、致命的な膠着を避けつつ「気づきにくい」ことは表現する。
             f_obs = np.zeros(2)
             for oi, (ox, oy, orad) in enumerate(self.config.OBSTACLES):
                 d = agent.pos - np.array([ox, oy])
                 dd = max(np.linalg.norm(d), 1e-6)
                 r_sum_o = agent.radius + orad
-                obs_in_fov = not in_lapse
-                if obs_in_fov and my_speed > 0.1:
+                obs_perception = self.config.LAPSE_OBSTACLE_RESIDUAL if in_lapse else 1.0
+                if obs_perception > 0 and not in_lapse and my_speed > 0.1:
                     ang = abs(np.arccos(np.clip(np.dot(agent.vel / my_speed, -d / dd), -1.0, 1.0)))
                     if ang > agent.fov_rad / 2:
-                        obs_in_fov = False
-                if obs_in_fov:
+                        obs_perception = 0.0
+                if obs_perception > 0:
                     m = self.config.OBSTACLE_REPULSION_A * np.exp((r_sum_o - dd) / self.config.OBSTACLE_REPULSION_B)
-                    f_obs += m * (d / dd)
+                    f_obs += m * obs_perception * (d / dd)
                 if dd < r_sum_o * self.config.OBSTACLE_CONTACT_FACTOR:
                     key = (agent.id, oi)
                     current_frame_obstacle.add(key)
