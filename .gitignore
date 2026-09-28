@@ -1,1 +1,6 @@
 __pycache__/
+# Windows同梱フォント（ライセンス上リポジトリには含めない。3D版がHUDの日本語
+# 表示に使う。無い場合は setup_font.py を実行するか、
+# C:\Windows\Fonts\meiryo.ttc をこのフォルダにコピーすること）
+meiryo.ttc
+

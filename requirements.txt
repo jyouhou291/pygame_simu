@@ -1,3 +1,4 @@
 pygame>=2.5.0
 numpy>=1.21.0
 matplotlib>=3.5.0
+ursina>=6.1.0  # 3D版 (simulation_3d.py) を試す場合のみ必要
