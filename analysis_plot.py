@@ -45,12 +45,18 @@ class AnalysisPlot:
         self.ax2.legend(loc='upper left')
         self.ax2.grid(True)
 
-        # プロット3 (タイプ別衝突率 - 棒グラフ)
-        self.bar_labels = ['通常歩行', '歩きスマホ']
-        self.bar_colors = ['blue', 'red']
-        self.bars = self.ax3.bar(self.bar_labels, [0, 0], color=self.bar_colors)
-        self.ax3.set_ylabel('一人当たりの衝突回数')
-        self.ax3.set_title('危険性の比較')
+        # プロット3 (タイプ別・指標別の危険性 - グループ棒グラフ)
+        # 「衝突」「柱・什器への接触」「よろめき」の3指標を、通常歩行/歩きスマホ
+        # それぞれについて一人当たりの発生回数で比較する。
+        self.metric_labels = ['衝突', '柱接触', 'よろめき']
+        x = range(len(self.metric_labels))
+        width = 0.35
+        self.bars_normal = self.ax3.bar([i - width / 2 for i in x], [0, 0, 0], width, color='#4fa8ff', label='通常歩行')
+        self.bars_phone = self.ax3.bar([i + width / 2 for i in x], [0, 0, 0], width, color='#ff4d4d', label='歩きスマホ')
+        self.ax3.set_xticks(list(x)); self.ax3.set_xticklabels(self.metric_labels)
+        self.ax3.set_ylabel('一人当たりの発生回数')
+        self.ax3.set_title('危険性の比較（指標別）')
+        self.ax3.legend(loc='upper left')
 
         # TkinterにMatplotlibのCanvasを埋め込む
         self.canvas = FigureCanvasTkAgg(self.fig, master=root)
@@ -68,7 +74,12 @@ class AnalysisPlot:
                 data = json.load(f)
 
             # テキスト情報を更新
-            self.total_collisions_var.set(f"総衝突回数: {data.get('total_collisions', 0)}")
+            self.total_collisions_var.set(
+                f"衝突: {data.get('total_collisions', 0)}  "
+                f"柱接触: {data.get('total_obstacle_collisions', 0)}  "
+                f"よろめき: {data.get('total_stumbles', 0)}  "
+                f"ニアミス: {data.get('total_near_misses', 0)}"
+            )
 
             # 時系列データを更新
             self.time_data.append(data.get("time", 0))
@@ -81,13 +92,14 @@ class AnalysisPlot:
             self.ax1.relim(); self.ax1.autoscale_view()
             self.ax2.relim(); self.ax2.autoscale_view()
 
-            # 棒グラフデータを更新
-            rate_normal = data.get("collision_rate_normal", 0)
-            rate_phone = data.get("collision_rate_phone", 0)
-            self.bars[0].set_height(rate_normal)
-            self.bars[1].set_height(rate_phone)
-            self.ax3.relim(); self.ax3.autoscale_view()
-            max_rate = max(0.1, rate_normal, rate_phone)
+            # 棒グラフデータを更新（衝突・柱接触・よろめきの3指標）
+            normal_vals = [data.get("collision_rate_normal", 0), data.get("obstacle_rate_normal", 0), data.get("stumble_rate_normal", 0)]
+            phone_vals = [data.get("collision_rate_phone", 0), data.get("obstacle_rate_phone", 0), data.get("stumble_rate_phone", 0)]
+            for bar, v in zip(self.bars_normal, normal_vals):
+                bar.set_height(v)
+            for bar, v in zip(self.bars_phone, phone_vals):
+                bar.set_height(v)
+            max_rate = max(0.1, *normal_vals, *phone_vals)
             self.ax3.set_ylim(0, max_rate * 1.2)
 
         except (json.JSONDecodeError, FileNotFoundError): pass
