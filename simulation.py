@@ -21,7 +21,9 @@ def draw_agent(surface, config: Config, agent, in_lapse: bool):
     px_pos = (int(agent.pos[0] * config.M_TO_PX), int(agent.pos[1] * config.M_TO_PX))
     color = config.AGENT_PHONE_COLOR if agent.phone_user else config.AGENT_COLOR
     pygame.draw.circle(surface, color, px_pos, int(config.AGENT_RADIUS_M * config.M_TO_PX))
-    if np.linalg.norm(agent.vel) > 0.1 and not in_lapse:
+    # 速度が低いほど社会的力モデルの微小なノイズで進行方向が激しく暴れるため
+    # （トレースログ解析で確認済み）、ほぼ停止している間は向き表示を出さない
+    if np.linalg.norm(agent.vel) > 0.5 and not in_lapse:
         a = math.atan2(-agent.vel[1], agent.vel[0])
         r = int(config.FOV_VIS_RADIUS_M * config.M_TO_PX * (0.7 if agent.phone_user else 1.3))
         rect = pygame.Rect(px_pos[0] - r, px_pos[1] - r, 2 * r, 2 * r)
@@ -33,8 +35,6 @@ def draw_agent(surface, config: Config, agent, in_lapse: bool):
             pygame.draw.line(surface, fov_c, px_pos, (px_pos[0] + r * math.cos(ea), px_pos[1] - r * math.sin(ea)), 1)
         except TypeError:
             pass
-    elif in_lapse:
-        pygame.draw.circle(surface, (255, 255, 255), (px_pos[0], px_pos[1] - 14), 2)
 
 
 class PygameRenderer:
@@ -42,7 +42,7 @@ class PygameRenderer:
 
     def __init__(self, args):
         self.core = SimulationCore(p_phone=args.p_phone, spawn_rate=args.spawn_rate, seed=args.seed,
-                                    max_agents=args.max_agents)
+                                    max_agents=args.max_agents, trace_path=args.trace)
         self.speed_multiplier = args.speed
         c = self.core.config
         pygame.init()
@@ -106,6 +106,7 @@ class PygameRenderer:
             if int(self.core.sim_time * 10) % 2 == 0:
                 self.core.write_live_data()
             self.clock.tick(60)
+        self.core.close_trace()
         pygame.quit(); sys.exit()
 
 
@@ -116,6 +117,8 @@ def main():
     parser.add_argument('--speed', type=int, default=1, help='Simulation speed multiplier.')
     parser.add_argument('--seed', type=int, default=None, help='再現したい場合のみ指定。未指定なら毎回変化する。')
     parser.add_argument('--max_agents', type=int, default=22, help='同時に存在できる歩行者数の上限（渋滞防止）')
+    parser.add_argument('--trace', type=str, default=None,
+                         help='指定したパスに毎フレームの各エージェント状態(位置・速度・向き等)をCSVで記録するデバッグ用オプション')
     renderer = PygameRenderer(parser.parse_args())
     renderer.run()
 

@@ -11,6 +11,7 @@
 from __future__ import annotations
 import numpy as np
 import json
+import csv
 from dataclasses import dataclass, field
 from collections import deque
 from typing import Optional
@@ -135,7 +136,7 @@ class SimulationCore:
     2D(simulation.py)・3D(simulation_3d.py)の両方から継承・利用される。"""
 
     def __init__(self, p_phone: float, spawn_rate: float, seed: Optional[int] = None,
-                 dt: float = 1.0 / 60.0, max_agents: int = 22):
+                 dt: float = 1.0 / 60.0, max_agents: int = 22, trace_path: Optional[str] = None):
         self.config = Config()
         self.p_phone = p_phone
         self.spawn_rate = spawn_rate
@@ -159,6 +160,22 @@ class SimulationCore:
         self.collision_markers = []  # (kind, pos, timestamp, danger)
         self.ongoing_collisions = set(); self.ongoing_near = set(); self.ongoing_obstacle = set()
         self._define_walkable_areas()
+
+        # --- デバッグ用トレース出力 ---
+        # 「揺れる」「避け方が不安」のような見た目の報告を、スクリーンショットで
+        # 目視するのではなく数値で原因箇所を特定できるようにするための機能。
+        # trace_pathを指定した時だけ毎フレーム各エージェントの位置・速度・向き
+        # ・最寄り障害物距離などをCSVに書き出す（通常実行には影響しない）。
+        self._trace_writer = None
+        self._trace_file = None
+        if trace_path:
+            self._trace_file = open(trace_path, "w", newline="", encoding="utf-8")
+            self._trace_writer = csv.writer(self._trace_file)
+            self._trace_writer.writerow([
+                "time", "agent_id", "phone_user", "pos_x", "pos_y", "vel_x", "vel_y",
+                "speed", "yaw_deg", "in_lapse", "nearest_obstacle_dist",
+                "collisions_count", "obstacle_collisions_count",
+            ])
 
     def _define_walkable_areas(self):
         self.sidewalk_top_y_range_m = (0.0, self.config.SIDEWALK_HEIGHT_M)
@@ -374,6 +391,34 @@ class SimulationCore:
         self.spawn_pedestrian()
         self.update_agents()
         self.sim_time += self.dt
+        if self._trace_writer is not None:
+            self._write_trace_frame()
+
+    def _write_trace_frame(self):
+        obstacles = self.config.OBSTACLES
+        for agent in self.agents:
+            speed = float(np.linalg.norm(agent.vel))
+            yaw_deg = float(np.degrees(np.arctan2(agent.vel[0], agent.vel[1]))) if speed > 0.1 else ""
+            in_lapse = self.sim_time < agent.lapse_until
+            if obstacles:
+                nearest = min(np.linalg.norm(agent.pos - np.array([ox, oy])) for (ox, oy, orad) in obstacles)
+            else:
+                nearest = ""
+            self._trace_writer.writerow([
+                round(self.sim_time, 4), agent.id, agent.phone_user,
+                round(float(agent.pos[0]), 4), round(float(agent.pos[1]), 4),
+                round(float(agent.vel[0]), 4), round(float(agent.vel[1]), 4),
+                round(speed, 4), round(yaw_deg, 2) if yaw_deg != "" else "",
+                in_lapse, round(float(nearest), 4) if nearest != "" else "",
+                agent.collisions_count, agent.obstacle_collisions_count,
+            ])
+        self._trace_file.flush()
+
+    def close_trace(self):
+        if self._trace_file is not None:
+            self._trace_file.close()
+            self._trace_file = None
+            self._trace_writer = None
 
     def write_live_data(self, path: str = "live_data.json"):
         current_avg_speed = np.mean([np.linalg.norm(a.vel) for a in self.agents]) if self.agents else 0
