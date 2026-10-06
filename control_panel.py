@@ -53,8 +53,12 @@ class ControlPanel:
         actions_frame.grid(row=2, column=0, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=5)
         self.research_button = ttk.Button(actions_frame, text="論文設定を適用", command=self.apply_research_settings)
         self.research_button.pack(fill=tk.X, padx=5, pady=3)
-        self.start_button = ttk.Button(actions_frame, text="シミュレーション開始 / 再起動", command=self.start_or_restart_simulation)
-        self.start_button.pack(fill=tk.X, padx=5, pady=3)
+        self.start_2d_button = ttk.Button(actions_frame, text="2Dシミュレーション開始 / 再起動",
+                                           command=lambda: self.start_or_restart_simulation("2d"))
+        self.start_2d_button.pack(fill=tk.X, padx=5, pady=3)
+        self.start_3d_button = ttk.Button(actions_frame, text="3Dシミュレーション開始 / 再起動",
+                                           command=lambda: self.start_or_restart_simulation("3d"))
+        self.start_3d_button.pack(fill=tk.X, padx=5, pady=3)
         self.stop_button = ttk.Button(actions_frame, text="シミュレーション停止", command=self.stop_all_processes)
         self.stop_button.pack(fill=tk.X, padx=5, pady=3)
 
@@ -74,23 +78,24 @@ class ControlPanel:
         self.p_phone_var.set(15.0); self.spawn_rate_var.set(0.8)
         self.status_var.set("状態: 論文設定を適用。開始ボタンを押してください。")
 
-    def start_or_restart_simulation(self):
+    def start_or_restart_simulation(self, mode="2d"):
         self.stop_all_processes()
-        self.status_var.set("状態: シミュレーションを開始中...")
+        self.status_var.set(f"状態: シミュレーションを開始中... ({mode.upper()})")
         p_phone = self.p_phone_var.get() / 100.0
         spawn_rate = self.spawn_rate_var.get()
         speed = self.speed_var.get()
 
-        sim_script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "simulation.py")
+        sim_script_name = "simulation_3d.py" if mode == "3d" else "simulation.py"
+        sim_script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), sim_script_name)
         analysis_script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "analysis_plot.py")
-        
+
         sim_command = ["python", sim_script_path, f"--p_phone={p_phone}", f"--spawn_rate={spawn_rate}", f"--speed={speed}"]
         analysis_command = ["python", analysis_script_path]
 
         try:
             self.simulation_process = subprocess.Popen(sim_command)
             self.analysis_process = subprocess.Popen(analysis_command)
-            self.status_var.set(f"状態: シミュレーション実行中 (x{speed})")
+            self.status_var.set(f"状態: シミュレーション実行中 ({mode.upper()}, x{speed})")
         except FileNotFoundError as e:
             self.status_var.set(f"エラー: {e.filename} が見つかりません。")
         except Exception as e:
