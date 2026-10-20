@@ -267,6 +267,15 @@ class SimulationCore:
                 dist = np.linalg.norm(vec_to_other)
                 r_sum = agent.radius + other.radius
 
+                # 衝突・ニアミスは「実際に物理的に起きた出来事」なので、知覚の
+                # 反応遅延を含まない真の位置・速度で判定する（dist/vec_to_other
+                # は知覚位置であり、FOV判定・回避力の計算にのみ使う）。
+                # 以前は衝突だけ知覚位置(dist)で判定しており、ニアミス（真の位置
+                # ベース、下記）と判定基準が食い違っていたため統一した。
+                dp_true = other.pos - agent.pos
+                dv_true = other.vel - agent.vel
+                dist_true = np.linalg.norm(dp_true)
+
                 # 各ペアは(agent=i,other=j)と(agent=j,other=i)の2回、このフレーム内で
                 # 訪問される（force計算が各エージェント視点で非対称なため、ループ自体は
                 # 両方向が必要）。イベント計測（衝突・ニアミス）はペア単位で1回だけ
@@ -274,21 +283,18 @@ class SimulationCore:
                 # (current_frame_*に既に入っているか)を先にチェックしてから追加する。
                 # これを怠ると、1回の接触が常に2回としてカウントされてしまう
                 # （以前の実装で実際に発生していた二重カウントのバグ）。
-                if dist < r_sum:
+                if dist_true < r_sum:
                     pair = tuple(sorted((agent.id, other.id)))
                     is_new_this_frame = pair not in current_frame_overlaps
                     current_frame_overlaps.add(pair)
                     if is_new_this_frame and pair not in self.ongoing_collisions:
                         agent.collisions_count += 1; other.collisions_count += 1; self.total_collisions += 1
-                        self.collision_markers.append(("collision", agent.pos + vec_to_other / 2, self.sim_time,
+                        self.collision_markers.append(("collision", agent.pos + dp_true / 2, self.sim_time,
                                                         agent.phone_user or other.phone_user))
                 else:
-                    # ニアミスは「近いだけ」ではなく、実際の位置・速度（知覚の
-                    # 反応遅延を含まない、物理的な真の値）から計算したTTCで
-                    # 判定する。立ち止まって近くにいるだけの2人や、すれ違って
+                    # ニアミスは「近いだけ」ではなく、相対速度・進行方向を考慮した
+                    # TTCで判定する。立ち止まって近くにいるだけの2人や、すれ違って
                     # 離れていく2人を誤ってニアミス扱いしないため。
-                    dp_true = other.pos - agent.pos
-                    dv_true = other.vel - agent.vel
                     ttc = self._time_to_collision(dp_true, dv_true, r_sum)
                     if 0.0 < ttc <= self.config.NEAR_MISS_TTC_THRESHOLD_S:
                         pair = tuple(sorted((agent.id, other.id)))
