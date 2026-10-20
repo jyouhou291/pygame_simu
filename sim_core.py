@@ -62,9 +62,15 @@ class Config:
     # 場合に本当に動けなくなる「引っかかり」バグの原因になっていた）
     LAPSE_OBSTACLE_RESIDUAL: float = 0.2
 
-    # --- 柱接触／ニアミスの判定係数 ---
+    # --- 柱接触の判定係数 ---
     OBSTACLE_CONTACT_FACTOR: float = 1.2   # 半径の和のこの倍数まで近づいたら「接触」
-    NEAR_MISS_FACTOR: float = 1.3          # 半径の和のこの倍数まで近づいたら「ニアミス」
+
+    # --- ニアミス（歩行者間）の判定: Time-to-Collision（TTC）出典[8] ---
+    # 単純な距離の閾値だと、ただ近くに立っている（＝接近も衝突の危険もない）
+    # 2人までニアミス扱いしてしまい、「公正な」危険度指標にならない。
+    # 交通工学のサロゲート安全評価で標準的に使われるTTC（このまま進んだら
+    # 何秒後に衝突するか、相対速度・進行方向まで考慮）に基づいて判定する。
+    NEAR_MISS_TTC_THRESHOLD_S: float = 1.5  # 出典[8]: 1980年代初頭から広く採用されている基準値
 
     # --- 2D(Pygame)描画向けの設定。3D版では M_TO_PX 等は使わず、色だけ流用する ---
     M_TO_PX: int = 25; FOV_VIS_RADIUS_M: float = 1.0
@@ -103,7 +109,7 @@ class Pedestrian:
     v_desired_magnitude: float = field(init=False); fluct_sigma: float = field(init=False)
     history: deque = field(default_factory=lambda: deque(maxlen=90))
     spawn_time: float = 0.0; exit_time: float = -1.0; collisions_count: int = 0
-    obstacle_collisions_count: int = 0
+    obstacle_collisions_count: int = 0; near_miss_count: int = 0
     fluct_ema: float = 0.0; last_fall_t: float = -999.0; lapse_until: float = -999.0
 
     def __post_init__(self):
@@ -157,6 +163,7 @@ class SimulationCore:
         self.phone_user_total_collisions = 0; self.normal_user_total_collisions = 0
         self.phone_user_total_obstacle = 0; self.normal_user_total_obstacle = 0
         self.phone_user_total_stumbles = 0; self.normal_user_total_stumbles = 0
+        self.phone_user_total_near_miss = 0; self.normal_user_total_near_miss = 0
         self.collision_markers = []  # (kind, pos, timestamp, danger)
         self.ongoing_collisions = set(); self.ongoing_near = set(); self.ongoing_obstacle = set()
         self._define_walkable_areas()
@@ -174,7 +181,7 @@ class SimulationCore:
             self._trace_writer.writerow([
                 "time", "agent_id", "phone_user", "pos_x", "pos_y", "vel_x", "vel_y",
                 "speed", "yaw_deg", "in_lapse", "nearest_obstacle_dist",
-                "collisions_count", "obstacle_collisions_count",
+                "collisions_count", "obstacle_collisions_count", "near_miss_count",
             ])
 
     def _define_walkable_areas(self):
@@ -184,6 +191,25 @@ class SimulationCore:
 
     def _y_range_for(self, y: float):
         return self.sidewalk_top_y_range_m if y < self.config.TOTAL_HEIGHT_M / 2 else self.sidewalk_bottom_y_range_m
+
+    @staticmethod
+    def _time_to_collision(dp: np.ndarray, dv: np.ndarray, r_sum: float) -> float:
+        """円同士のTime-to-Collision（等速直線運動を仮定した、接触までの秒数）。
+        出典[8]。dp = 相手の位置 - 自分の位置、dv = 相手の速度 - 自分の速度。
+        離れていく・平行に進む（衝突しない）場合は無限大を返す。
+        すでに重なっている場合は0.0（＝衝突。呼び出し側で別途カウント済み）。"""
+        a = float(np.dot(dv, dv))
+        c = float(np.dot(dp, dp)) - r_sum ** 2
+        if c <= 0:
+            return 0.0
+        if a < 1e-9:
+            return np.inf
+        b = 2.0 * float(np.dot(dp, dv))
+        disc = b * b - 4 * a * c
+        if disc < 0:
+            return np.inf
+        t1 = (-b - np.sqrt(disc)) / (2 * a)
+        return t1 if t1 >= 0 else np.inf
 
     # -------------------- スポーン（歩道の二方向すれ違い） --------------------
     def spawn_pedestrian(self):
@@ -241,18 +267,36 @@ class SimulationCore:
                 dist = np.linalg.norm(vec_to_other)
                 r_sum = agent.radius + other.radius
 
+                # 各ペアは(agent=i,other=j)と(agent=j,other=i)の2回、このフレーム内で
+                # 訪問される（force計算が各エージェント視点で非対称なため、ループ自体は
+                # 両方向が必要）。イベント計測（衝突・ニアミス）はペア単位で1回だけ
+                # 数えたいので、「このフレーム内で既にこのペアを処理したか」
+                # (current_frame_*に既に入っているか)を先にチェックしてから追加する。
+                # これを怠ると、1回の接触が常に2回としてカウントされてしまう
+                # （以前の実装で実際に発生していた二重カウントのバグ）。
                 if dist < r_sum:
                     pair = tuple(sorted((agent.id, other.id)))
+                    is_new_this_frame = pair not in current_frame_overlaps
                     current_frame_overlaps.add(pair)
-                    if pair not in self.ongoing_collisions:
+                    if is_new_this_frame and pair not in self.ongoing_collisions:
                         agent.collisions_count += 1; other.collisions_count += 1; self.total_collisions += 1
                         self.collision_markers.append(("collision", agent.pos + vec_to_other / 2, self.sim_time,
                                                         agent.phone_user or other.phone_user))
-                elif dist < r_sum * self.config.NEAR_MISS_FACTOR:
-                    pair = tuple(sorted((agent.id, other.id)))
-                    current_frame_near.add(pair)
-                    if pair not in self.ongoing_near and pair not in self.ongoing_collisions:
-                        self.total_near_misses += 1
+                else:
+                    # ニアミスは「近いだけ」ではなく、実際の位置・速度（知覚の
+                    # 反応遅延を含まない、物理的な真の値）から計算したTTCで
+                    # 判定する。立ち止まって近くにいるだけの2人や、すれ違って
+                    # 離れていく2人を誤ってニアミス扱いしないため。
+                    dp_true = other.pos - agent.pos
+                    dv_true = other.vel - agent.vel
+                    ttc = self._time_to_collision(dp_true, dv_true, r_sum)
+                    if 0.0 < ttc <= self.config.NEAR_MISS_TTC_THRESHOLD_S:
+                        pair = tuple(sorted((agent.id, other.id)))
+                        is_new_this_frame = pair not in current_frame_near
+                        current_frame_near.add(pair)
+                        if is_new_this_frame and pair not in self.ongoing_near and pair not in self.ongoing_collisions:
+                            self.total_near_misses += 1
+                            agent.near_miss_count += 1; other.near_miss_count += 1
 
                 is_in_fov = not in_lapse
                 if is_in_fov and my_speed > 0.1 and dist > 0:
@@ -380,10 +424,12 @@ class SimulationCore:
                 self.phone_users_completed += 1
                 self.phone_user_total_collisions += agent.collisions_count
                 self.phone_user_total_obstacle += agent.obstacle_collisions_count
+                self.phone_user_total_near_miss += agent.near_miss_count
             else:
                 self.normal_users_completed += 1
                 self.normal_user_total_collisions += agent.collisions_count
                 self.normal_user_total_obstacle += agent.obstacle_collisions_count
+                self.normal_user_total_near_miss += agent.near_miss_count
         self.agents = [a for a in self.agents if a.exit_time < 0]
 
     def step(self):
@@ -410,7 +456,7 @@ class SimulationCore:
                 round(float(agent.vel[0]), 4), round(float(agent.vel[1]), 4),
                 round(speed, 4), round(yaw_deg, 2) if yaw_deg != "" else "",
                 in_lapse, round(float(nearest), 4) if nearest != "" else "",
-                agent.collisions_count, agent.obstacle_collisions_count,
+                agent.collisions_count, agent.obstacle_collisions_count, agent.near_miss_count,
             ])
         self._trace_file.flush()
 
@@ -428,6 +474,8 @@ class SimulationCore:
         obs_rate_normal = self.normal_user_total_obstacle / self.normal_users_completed if self.normal_users_completed > 0 else 0
         stumble_rate_phone = self.phone_user_total_stumbles / self.phone_users_completed if self.phone_users_completed > 0 else 0
         stumble_rate_normal = self.normal_user_total_stumbles / self.normal_users_completed if self.normal_users_completed > 0 else 0
+        near_miss_rate_phone = self.phone_user_total_near_miss / self.phone_users_completed if self.phone_users_completed > 0 else 0
+        near_miss_rate_normal = self.normal_user_total_near_miss / self.normal_users_completed if self.normal_users_completed > 0 else 0
         data = {
             "time": self.sim_time, "agent_count": len(self.agents), "completed_count": len(self.completed_agents),
             "total_collisions": self.total_collisions, "total_obstacle_collisions": self.total_obstacle_collisions,
@@ -436,6 +484,7 @@ class SimulationCore:
             "collision_rate_phone": rate_phone, "collision_rate_normal": rate_normal,
             "obstacle_rate_phone": obs_rate_phone, "obstacle_rate_normal": obs_rate_normal,
             "stumble_rate_phone": stumble_rate_phone, "stumble_rate_normal": stumble_rate_normal,
+            "near_miss_rate_phone": near_miss_rate_phone, "near_miss_rate_normal": near_miss_rate_normal,
         }
         try:
             with open(path, "w", encoding="utf-8") as f:

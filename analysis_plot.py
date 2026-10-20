@@ -46,13 +46,13 @@ class AnalysisPlot:
         self.ax2.grid(True)
 
         # プロット3 (タイプ別・指標別の危険性 - グループ棒グラフ)
-        # 「衝突」「柱・什器への接触」「よろめき」の3指標を、通常歩行/歩きスマホ
-        # それぞれについて一人当たりの発生回数で比較する。
-        self.metric_labels = ['衝突', '柱接触', 'よろめき']
+        # 「衝突」「柱・什器への接触」「よろめき」「ニアミス（TTCベース）」の
+        # 4指標を、通常歩行/歩きスマホそれぞれについて一人当たりの発生回数で比較する。
+        self.metric_labels = ['衝突', '柱接触', 'よろめき', 'ニアミス']
         x = range(len(self.metric_labels))
         width = 0.35
-        self.bars_normal = self.ax3.bar([i - width / 2 for i in x], [0, 0, 0], width, color='#4fa8ff', label='通常歩行')
-        self.bars_phone = self.ax3.bar([i + width / 2 for i in x], [0, 0, 0], width, color='#ff4d4d', label='歩きスマホ')
+        self.bars_normal = self.ax3.bar([i - width / 2 for i in x], [0, 0, 0, 0], width, color='#4fa8ff', label='通常歩行')
+        self.bars_phone = self.ax3.bar([i + width / 2 for i in x], [0, 0, 0, 0], width, color='#ff4d4d', label='歩きスマホ')
         self.ax3.set_xticks(list(x)); self.ax3.set_xticklabels(self.metric_labels)
         self.ax3.set_ylabel('一人当たりの発生回数')
         self.ax3.set_title('危険性の比較（指標別）')
@@ -92,9 +92,11 @@ class AnalysisPlot:
             self.ax1.relim(); self.ax1.autoscale_view()
             self.ax2.relim(); self.ax2.autoscale_view()
 
-            # 棒グラフデータを更新（衝突・柱接触・よろめきの3指標）
-            normal_vals = [data.get("collision_rate_normal", 0), data.get("obstacle_rate_normal", 0), data.get("stumble_rate_normal", 0)]
-            phone_vals = [data.get("collision_rate_phone", 0), data.get("obstacle_rate_phone", 0), data.get("stumble_rate_phone", 0)]
+            # 棒グラフデータを更新（衝突・柱接触・よろめき・ニアミスの4指標）
+            normal_vals = [data.get("collision_rate_normal", 0), data.get("obstacle_rate_normal", 0),
+                           data.get("stumble_rate_normal", 0), data.get("near_miss_rate_normal", 0)]
+            phone_vals = [data.get("collision_rate_phone", 0), data.get("obstacle_rate_phone", 0),
+                          data.get("stumble_rate_phone", 0), data.get("near_miss_rate_phone", 0)]
             for bar, v in zip(self.bars_normal, normal_vals):
                 bar.set_height(v)
             for bar, v in zip(self.bars_phone, phone_vals):
