@@ -111,6 +111,17 @@ class Pedestrian:
     spawn_time: float = 0.0; exit_time: float = -1.0; collisions_count: int = 0
     obstacle_collisions_count: int = 0; near_miss_count: int = 0
     fluct_ema: float = 0.0; last_fall_t: float = -999.0; lapse_until: float = -999.0
+    # このフレームで速度低下(speed_dampening)が起きた原因（近くにいた相手の属性別）。
+    # 「赤い人（スマホ利用者）が近くにいることだけが原因の速度低下」を、通常歩行者
+    # 同士の混雑による速度低下と区別して識別するために追加した。
+    dampened_by_phone: bool = False
+    dampened_by_normal: bool = False
+    # 累積値（この歩行者が存在した全フレーム中、各原因で速度低下が発生したフレーム数）
+    dampened_by_phone_frames: int = 0
+    dampened_by_normal_frames: int = 0
+    dampened_by_phone_only_frames: int = 0  # スマホ利用者が原因で、通常歩行者は原因でなかったフレーム
+    dampened_by_normal_only_frames: int = 0  # 通常歩行者が原因で、スマホ利用者は原因でなかったフレーム
+    frames_alive: int = 0
 
     def __post_init__(self):
         self.radius = self.config.AGENT_RADIUS_M
@@ -164,6 +175,14 @@ class SimulationCore:
         self.phone_user_total_obstacle = 0; self.normal_user_total_obstacle = 0
         self.phone_user_total_stumbles = 0; self.normal_user_total_stumbles = 0
         self.phone_user_total_near_miss = 0; self.normal_user_total_near_miss = 0
+        # 「赤い人（スマホ利用者）が近くにいることだけが原因の速度低下」を識別するための
+        # 累積値。通常歩行者（青）について、存在した全フレーム中、(a)スマホ利用者が
+        # 近くにいたことで速度低下したフレーム数、(b)そのうち通常歩行者の混雑は
+        # 原因になっていなかった（赤い人だけが原因と言える）フレーム数、を集計する。
+        self.normal_frames_total = 0
+        self.normal_frames_dampened_by_phone = 0
+        self.normal_frames_dampened_by_phone_only = 0
+        self.normal_frames_dampened_by_normal_only = 0
         self.collision_markers = []  # (kind, pos, timestamp, danger)
         self.ongoing_collisions = set(); self.ongoing_near = set(); self.ongoing_obstacle = set()
         self._define_walkable_areas()
@@ -182,6 +201,7 @@ class SimulationCore:
                 "time", "agent_id", "phone_user", "pos_x", "pos_y", "vel_x", "vel_y",
                 "speed", "yaw_deg", "in_lapse", "nearest_obstacle_dist",
                 "collisions_count", "obstacle_collisions_count", "near_miss_count",
+                "dampened_by_phone", "dampened_by_normal",
             ])
 
     def _define_walkable_areas(self):
@@ -256,6 +276,8 @@ class SimulationCore:
 
             f_avoid = np.zeros(2)
             speed_dampening_factor = 1.0
+            agent.dampened_by_phone = False
+            agent.dampened_by_normal = False
             my_state = agent.get_delayed_state(self.sim_time)
             my_speed = np.linalg.norm(agent.vel)
 
@@ -313,6 +335,10 @@ class SimulationCore:
                 if is_in_fov:
                     if dist < self.config.AGENT_RADIUS_M * 4:
                         speed_dampening_factor = max(0.6, speed_dampening_factor - 0.1)
+                        if other.phone_user:
+                            agent.dampened_by_phone = True
+                        else:
+                            agent.dampened_by_normal = True
                     repulsion_b = self.config.AGENT_REPULSION_B_NORMAL if not agent.phone_user else self.config.AGENT_REPULSION_B_PHONE
                     force_mag = self.config.AGENT_REPULSION_A * np.exp((r_sum - dist) / repulsion_b)
                     evasion_boost = 1.0
@@ -391,6 +417,18 @@ class SimulationCore:
             v_desired_vec = e0 * agent.v_desired_magnitude * speed_dampening_factor
             f_drive = (v_desired_vec - agent.vel) / self.config.RELAXATION_TIME_TAU_S
 
+            # 速度低下の原因別フレーム数を累積（「赤い人だけが原因の速度低下」を
+            # 「通常歩行者同士の混雑による速度低下」と区別して後から集計できるように）
+            agent.frames_alive += 1
+            if agent.dampened_by_phone:
+                agent.dampened_by_phone_frames += 1
+                if not agent.dampened_by_normal:
+                    agent.dampened_by_phone_only_frames += 1
+            if agent.dampened_by_normal:
+                agent.dampened_by_normal_frames += 1
+                if not agent.dampened_by_phone:
+                    agent.dampened_by_normal_only_frames += 1
+
             # --- 歩道の境界（車道側へはみ出さないようにする壁の反発力） ---
             y_range = self._y_range_for(agent.pos[1])
             f_wall = np.array([0.0,
@@ -436,6 +474,10 @@ class SimulationCore:
                 self.normal_user_total_collisions += agent.collisions_count
                 self.normal_user_total_obstacle += agent.obstacle_collisions_count
                 self.normal_user_total_near_miss += agent.near_miss_count
+                self.normal_frames_total += agent.frames_alive
+                self.normal_frames_dampened_by_phone += agent.dampened_by_phone_frames
+                self.normal_frames_dampened_by_phone_only += agent.dampened_by_phone_only_frames
+                self.normal_frames_dampened_by_normal_only += agent.dampened_by_normal_only_frames
         self.agents = [a for a in self.agents if a.exit_time < 0]
 
     def step(self):
@@ -463,6 +505,7 @@ class SimulationCore:
                 round(speed, 4), round(yaw_deg, 2) if yaw_deg != "" else "",
                 in_lapse, round(float(nearest), 4) if nearest != "" else "",
                 agent.collisions_count, agent.obstacle_collisions_count, agent.near_miss_count,
+                agent.dampened_by_phone, agent.dampened_by_normal,
             ])
         self._trace_file.flush()
 
@@ -482,6 +525,10 @@ class SimulationCore:
         stumble_rate_normal = self.normal_user_total_stumbles / self.normal_users_completed if self.normal_users_completed > 0 else 0
         near_miss_rate_phone = self.phone_user_total_near_miss / self.phone_users_completed if self.phone_users_completed > 0 else 0
         near_miss_rate_normal = self.normal_user_total_near_miss / self.normal_users_completed if self.normal_users_completed > 0 else 0
+        # 「赤い人（スマホ利用者）だけが原因の速度低下」の割合（通常歩行者の存在フレームのうち）
+        frac_dampened_by_phone = self.normal_frames_dampened_by_phone / self.normal_frames_total if self.normal_frames_total > 0 else 0
+        frac_dampened_by_phone_only = self.normal_frames_dampened_by_phone_only / self.normal_frames_total if self.normal_frames_total > 0 else 0
+        frac_dampened_by_normal_only = self.normal_frames_dampened_by_normal_only / self.normal_frames_total if self.normal_frames_total > 0 else 0
         data = {
             "time": self.sim_time, "agent_count": len(self.agents), "completed_count": len(self.completed_agents),
             "total_collisions": self.total_collisions, "total_obstacle_collisions": self.total_obstacle_collisions,
@@ -491,6 +538,9 @@ class SimulationCore:
             "obstacle_rate_phone": obs_rate_phone, "obstacle_rate_normal": obs_rate_normal,
             "stumble_rate_phone": stumble_rate_phone, "stumble_rate_normal": stumble_rate_normal,
             "near_miss_rate_phone": near_miss_rate_phone, "near_miss_rate_normal": near_miss_rate_normal,
+            "normal_frac_dampened_by_phone": frac_dampened_by_phone,
+            "normal_frac_dampened_by_phone_only": frac_dampened_by_phone_only,
+            "normal_frac_dampened_by_normal_only": frac_dampened_by_normal_only,
         }
         try:
             with open(path, "w", encoding="utf-8") as f:
