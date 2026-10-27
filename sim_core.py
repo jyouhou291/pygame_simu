@@ -189,6 +189,12 @@ class SimulationCore:
         self.phone_user_total_obstacle = 0; self.normal_user_total_obstacle = 0
         self.phone_user_total_stumbles = 0; self.normal_user_total_stumbles = 0
         self.phone_user_total_near_miss = 0; self.normal_user_total_near_miss = 0
+        # 「歩きスマホの人たちに対する回避率」：少なくとも一方がスマホ利用者だった
+        # 接近イベント（衝突 or ニアミス）のうち、実際に衝突せず避けられた割合を
+        # 後から計算できるよう、ペア単位で1回ずつ集計する（衝突・ニアミス双方で
+        # 既に実装している「同一フレーム内の二重カウント防止」の仕組みをそのまま使う）。
+        self.phone_involved_collisions = 0
+        self.phone_involved_near_misses = 0
         # 「赤い人（スマホ利用者）が近くにいることだけが原因の速度低下」を識別するための
         # 累積値。通常歩行者（青）について、存在した全フレーム中、(a)スマホ利用者が
         # 近くにいたことで速度低下したフレーム数、(b)そのうち通常歩行者の混雑は
@@ -325,8 +331,11 @@ class SimulationCore:
                     current_frame_overlaps.add(pair)
                     if is_new_this_frame and pair not in self.ongoing_collisions:
                         agent.collisions_count += 1; other.collisions_count += 1; self.total_collisions += 1
+                        phone_involved = agent.phone_user or other.phone_user
                         self.collision_markers.append(("collision", agent.pos + dp_true / 2, self.sim_time,
-                                                        agent.phone_user or other.phone_user))
+                                                        phone_involved))
+                        if phone_involved:
+                            self.phone_involved_collisions += 1
                 else:
                     # ニアミスは「近いだけ」ではなく、相対速度・進行方向を考慮した
                     # TTCで判定する。立ち止まって近くにいるだけの2人や、すれ違って
@@ -339,6 +348,8 @@ class SimulationCore:
                         if is_new_this_frame and pair not in self.ongoing_near and pair not in self.ongoing_collisions:
                             self.total_near_misses += 1
                             agent.near_miss_count += 1; other.near_miss_count += 1
+                            if agent.phone_user or other.phone_user:
+                                self.phone_involved_near_misses += 1
 
                 is_in_fov = not in_lapse
                 if is_in_fov and my_speed > 0.1 and dist > 0:
@@ -543,6 +554,8 @@ class SimulationCore:
         frac_dampened_by_phone = self.normal_frames_dampened_by_phone / self.normal_frames_total if self.normal_frames_total > 0 else 0
         frac_dampened_by_phone_only = self.normal_frames_dampened_by_phone_only / self.normal_frames_total if self.normal_frames_total > 0 else 0
         frac_dampened_by_normal_only = self.normal_frames_dampened_by_normal_only / self.normal_frames_total if self.normal_frames_total > 0 else 0
+        phone_encounter_total = self.phone_involved_collisions + self.phone_involved_near_misses
+        phone_avoidance_rate = self.phone_involved_near_misses / phone_encounter_total if phone_encounter_total > 0 else 0
         data = {
             "time": self.sim_time, "agent_count": len(self.agents), "completed_count": len(self.completed_agents),
             "total_collisions": self.total_collisions, "total_obstacle_collisions": self.total_obstacle_collisions,
@@ -555,6 +568,9 @@ class SimulationCore:
             "normal_frac_dampened_by_phone": frac_dampened_by_phone,
             "normal_frac_dampened_by_phone_only": frac_dampened_by_phone_only,
             "normal_frac_dampened_by_normal_only": frac_dampened_by_normal_only,
+            "phone_involved_collisions": self.phone_involved_collisions,
+            "phone_involved_near_misses": self.phone_involved_near_misses,
+            "phone_avoidance_rate": phone_avoidance_rate,
         }
         try:
             with open(path, "w", encoding="utf-8") as f:
