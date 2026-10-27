@@ -197,7 +197,7 @@ def main():
     parser.add_argument('--spawn_rate', type=float, default=0.9)
     parser.add_argument('--speed', type=int, default=1)
     parser.add_argument('--seed', type=int, default=None)
-    parser.add_argument('--max_agents', type=int, default=22, help='同時に存在できる歩行者数の上限（渋滞防止）')
+    parser.add_argument('--max_agents', type=int, default=13, help='同時に存在できる歩行者数の上限（渋滞防止。歩道幅1.5m換算）')
     parser.add_argument('--trace', type=str, default=None,
                          help='指定したパスに毎フレームの各エージェント状態(位置・速度・向き等)をCSVで記録するデバッグ用オプション')
     args = parser.parse_args()

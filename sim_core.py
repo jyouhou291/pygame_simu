@@ -31,6 +31,9 @@ class Config:
     AVOID_BETA_PHONE: float = 0.7
     SPEED_ALPHA_PHONE: float = 0.70   # 出典[5]: 歩きスマホで歩行速度が3割減速
     RELAXATION_TIME_TAU_S: float = 0.5; AGENT_REPULSION_A: float = 5.0
+    # 回避距離(B)を縮める実験をしたが、力の立ち上がりが遅くなり逆に衝突が
+    # 増えてしまったため元の値に戻した（Bを縮める＝同じ距離での力が弱まる
+    # ため、見た目の間合いは縮まらず、単に回避が間に合わなくなるだけだった）。
     AGENT_REPULSION_B_PHONE: float = 0.3; AGENT_REPULSION_B_NORMAL: float = 0.6
     OBSTACLE_REPULSION_A: float = 3.0; OBSTACLE_REPULSION_B: float = 0.15
     NORMAL_EVASION_BOOST: float = 1.8; SHUFFLE_EVASION_BOOST: float = 0.5; SHOULDER_PASS_BOOST: float = 0.9
@@ -92,12 +95,15 @@ class Config:
         self.WIDTH_PX = int(self.WIDTH_M * self.M_TO_PX)
         self.HEIGHT_PX = int(self.TOTAL_HEIGHT_M * self.M_TO_PX)
         # 街灯は実際の日本の道路と同じく、歩道の中央ではなく建物側の端に寄せて
-        # 置く。ただし、レーン分離力の目標位置(LANE_BIAS_FRAC=0.25/0.75)と
-        # 全く同じ座標に置くと、片方向のレーンがそのまま街灯を貫通する形になり
-        # 「電柱に引っかかる人が出てくる」不具合の原因になる（v19.3で一度
-        # 修正済み）。そのため、壁とレーン目標位置のちょうど中間（壁寄りの端）に
-        # 置き、どちらとも重ならないようにしている。
-        edge_offset = self.SIDEWALK_HEIGHT_M * self.LANE_BIAS_FRAC * 0.5
+        # 置く。壁とレーン目標位置のちょうど中間に置くと、壁側・レーン側の
+        # 両方からギリギリに挟まれた隙間になり、回避のたびに狭い隙間を
+        # 縫うように通る必要が生じて「スムーズさが失われる」問題があった
+        # （実測・3D目視で確認）。そこで壁にほぼ密着させる配置に変更し、
+        # 制約を壁側の一方だけにして、帯の奥（レーン目標位置の先）に
+        # 回避の逃げ場を残すようにした。なお、レーン目標位置とは重ならない
+        # （v19.3で修正した「電柱に引っかかる」不具合の再発を避ける）。
+        wall_margin = 0.05  # 壁と街灯のわずかな隙間
+        edge_offset = self.LAMPPOST_RADIUS_M + wall_margin
         top_y = edge_offset
         bottom_y = self.TOTAL_HEIGHT_M - edge_offset
         xs = np.linspace(4.0, self.WIDTH_M - 4.0, 5)
@@ -158,7 +164,7 @@ class SimulationCore:
     2D(simulation.py)・3D(simulation_3d.py)の両方から継承・利用される。"""
 
     def __init__(self, p_phone: float, spawn_rate: float, seed: Optional[int] = None,
-                 dt: float = 1.0 / 60.0, max_agents: int = 22, trace_path: Optional[str] = None):
+                 dt: float = 1.0 / 60.0, max_agents: int = 13, trace_path: Optional[str] = None):
         self.config = Config()
         self.p_phone = p_phone
         self.spawn_rate = spawn_rate
@@ -166,6 +172,9 @@ class SimulationCore:
         # 生成し続けると密度が破綻して将棋倒し状態になり、「歩きスマホだから
         # 危険」という個別の対比がかえって見えなくなってしまう。生成レートは
         # あくまで「上限までの埋まる速さ」を調整するものとして扱う。
+        # 歩道幅を2.5m→1.5mに狭めた際、面積が60%になった分、密度を保つよう
+        # 上限も22→13に比例して下げた（元の22のままだと狭い帯に詰め込み
+        # すぎて、電柱付近や出入り口で団子状の渋滞が目視で確認された）。
         self.max_agents = max_agents
         self.rng = np.random.default_rng(seed)  # seed未指定なら毎回変化する
         self.dt = dt
