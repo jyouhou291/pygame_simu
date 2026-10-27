@@ -20,7 +20,9 @@ from typing import Optional
 @dataclass
 class Config:
     # --- 歩道空間の定義（二方向のすれ違い） ---
-    WIDTH_M: float = 30.0; SIDEWALK_HEIGHT_M: float = 2.5; ROAD_HEIGHT_M: float = 4.0
+    # SIDEWALK_HEIGHT_M: 「人二人がすれ違えるくらいの日本の道」幅（1.5m）に設定。
+    # 元の2.5mは欧米的な広い歩道の感覚に近かったため、より日本の街らしい狭さにした。
+    WIDTH_M: float = 30.0; SIDEWALK_HEIGHT_M: float = 1.5; ROAD_HEIGHT_M: float = 4.0
     LAMPPOST_RADIUS_M: float = 0.15  # 街灯・標識ポール（障害物）の太さ
 
     AGENT_RADIUS_M: float = 0.22; V0_MEAN: float = 1.3; V0_STD: float = 0.2; MAX_SPEED_M_S: float = 2.2
@@ -89,12 +91,15 @@ class Config:
         self.TOTAL_HEIGHT_M = 2 * self.SIDEWALK_HEIGHT_M + self.ROAD_HEIGHT_M
         self.WIDTH_PX = int(self.WIDTH_M * self.M_TO_PX)
         self.HEIGHT_PX = int(self.TOTAL_HEIGHT_M * self.M_TO_PX)
-        # 街灯は帯の中央（両方向のレーンの間）に置く。以前はレーン分離力の
-        # 目標位置(LANE_BIAS_FRAC=0.25/0.75)と全く同じ座標に街灯を置いて
-        # しまっており、片方向のレーンがそのまま街灯を貫通する形になって
-        # 「電柱に引っかかる人が出てくる」不具合の原因になっていた。
-        top_y = self.SIDEWALK_HEIGHT_M * 0.5
-        bottom_y = self.SIDEWALK_HEIGHT_M + self.ROAD_HEIGHT_M + self.SIDEWALK_HEIGHT_M * 0.5
+        # 街灯は実際の日本の道路と同じく、歩道の中央ではなく建物側の端に寄せて
+        # 置く。ただし、レーン分離力の目標位置(LANE_BIAS_FRAC=0.25/0.75)と
+        # 全く同じ座標に置くと、片方向のレーンがそのまま街灯を貫通する形になり
+        # 「電柱に引っかかる人が出てくる」不具合の原因になる（v19.3で一度
+        # 修正済み）。そのため、壁とレーン目標位置のちょうど中間（壁寄りの端）に
+        # 置き、どちらとも重ならないようにしている。
+        edge_offset = self.SIDEWALK_HEIGHT_M * self.LANE_BIAS_FRAC * 0.5
+        top_y = edge_offset
+        bottom_y = self.TOTAL_HEIGHT_M - edge_offset
         xs = np.linspace(4.0, self.WIDTH_M - 4.0, 5)
         self.OBSTACLES = tuple((float(x), top_y, self.LAMPPOST_RADIUS_M) for x in xs[::2]) + \
                           tuple((float(x), bottom_y, self.LAMPPOST_RADIUS_M) for x in xs[1::2])
